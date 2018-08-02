@@ -1,27 +1,25 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
-using System.Drawing;
 using System.IO;
-using System.Linq;
-using System.Text;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace ActiveBackup
 {
     public partial class ActiveBackup : Form
     {
-        static readonly int maxFolderSize = 90;
-        static readonly int minFolderSize = 30;
+        private static int maxPercentage = 0;
+        private static int minPercentage = 0;
+        private static string watchedPath = "";
+        private static string backupPath = "";
+        private static List<string> whiteList = new List<string>();
 
-        Thread th;
+        Thread discWatcher;
 
         public ActiveBackup()
         {
             InitializeComponent();
+            discWatcher = new Thread(new ThreadStart(WatchForBackup));
         }
 
         private void TxtFolder_DoubleClick(object sender, EventArgs e)
@@ -31,12 +29,8 @@ namespace ActiveBackup
                 if (fbd.ShowDialog() == DialogResult.OK)
                 {
                     txtFolder.Text = fbd.SelectedPath;
-
-                    lblProgress.Text = "";
-                    progBarFolder.Value = 30;
-
-                    th = new Thread(() => InvokeMethod(fbd.SelectedPath));
-                    th.Start();
+                    watchedPath = fbd.SelectedPath;
+                    Environment.SetEnvironmentVariable("BackupPath", watchedPath);
                 }
             }
         }
@@ -48,43 +42,78 @@ namespace ActiveBackup
                 if (fbd.ShowDialog() == DialogResult.OK)
                 {
                     txtBackup.Text = fbd.SelectedPath;
+                    backupPath = fbd.SelectedPath;
                 }
             }
         }
 
-        private void InvokeMethod(string filePath)
+        private void TxtWhiteList_DoubleClick(object sender, EventArgs e)
+        {
+            using (OpenFileDialog ofd = new OpenFileDialog())
+            {
+                ofd.Multiselect = true;
+                if (ofd.ShowDialog() == DialogResult.OK)
+                {
+                    foreach (string item in ofd.FileNames)
+                    {
+                        whiteList.Add(item);
+                        txtWhiteList.Text += item;
+                        txtWhiteList.Text += "\r\n";
+                    }
+                }
+            }
+        }
+
+        private void BtnStart_Click(object sender, EventArgs e)
+        {
+            maxPercentage = (int)maxPercent.Value;
+            minPercentage = (int)minPercent.Value;
+            discWatcher.Start();
+        }
+
+        private void WatchForBackup()
         {
             while (true)
             {
-                GiveSizeToProgBar(filePath);
+                ActualizeProgBar();
+                if (IsSizeInRange() == 1)
+                {
+                    Backup();
+                }
                 Thread.Sleep(1000);
             }
         }
 
-        private void GiveSizeToProgBar(string filePath)
+        private void Backup()
         {
-            long dirSize = GetDirectorySize(filePath);
-            if (IsSizeInRange(filePath) == 0)
+            foreach (String path in whiteList)
             {
-                lblProgress.Text = dirSize.ToString() + " kb";
-                progBarFolder.Value = (int)dirSize;
+                foreach (String file in Directory.GetFiles(path))
+                {
+                    if (!whiteList.Contains(file))
+                    {
+                        File.SetAttributes(file, FileAttributes.Normal);
+                        String fileName = Path.GetFileName(file);
+                        File.Move(file, Environment.GetEnvironmentVariable("BackupPath") + @"\" + fileName);
+                    }
+                }
             }
         }
 
-        private int IsSizeInRange(string filePath)
+        private int IsSizeInRange()
         {
             int inRange = 0;
-            long dirSize = GetDirectorySize(filePath);
+            int freeSpace = GetPercentageOfFreeSpace();
 
-            if (dirSize < maxFolderSize && dirSize > minFolderSize)
+            if (freeSpace < maxPercentage && freeSpace > minPercentage)
             {
                 inRange = 0;
             }
-            else if (dirSize >= maxFolderSize)
+            else if (freeSpace >= maxPercentage)
             {
                 inRange = 1;
             }
-            else if (dirSize <= minFolderSize)
+            else if (freeSpace <= minPercentage)
             {
                 inRange = -1;
             }
@@ -92,23 +121,37 @@ namespace ActiveBackup
             return inRange;
         }
 
-        //kbytes
-        private long GetDirectorySize(string filePath)
+        private int GetPercentageOfFreeSpace()
         {
-            var files = Directory.EnumerateFiles(filePath);
+            int percentage = 0;
+            DriveInfo driveInfo = new DriveInfo(watchedPath[0].ToString());
+            long freeSpace = driveInfo.AvailableFreeSpace;
+            long totalSize = driveInfo.TotalSize;
+            string tempLong = (100 * freeSpace / totalSize).ToString();
+            percentage = Convert.ToInt32(tempLong);
+            return percentage;
+        }
 
-            var currentSize = (from file in files let fileInfo = new FileInfo(file) select fileInfo.Length).Sum();
-
-            var directories = Directory.EnumerateDirectories(filePath);
-
-            var subDirSize = (from directory in directories select GetDirectorySize(directory)).Sum();
-
-            return (currentSize + subDirSize)/1024;
+        private void ActualizeProgBar()
+        {
+            progBar.BeginInvoke(new Action(() =>
+            {
+                progBar.Value = 100 - GetPercentageOfFreeSpace();
+            }));
+            lblProgress.BeginInvoke(new Action(() =>
+            {
+                lblProgress.Text = (100 - GetPercentageOfFreeSpace()).ToString() + "%";
+            }));
+            
         }
 
         private void ActiveBackup_FormClosing(object sender, FormClosingEventArgs e)
         {
-            th.Abort();
+            if (discWatcher.IsAlive)
+            {
+                discWatcher.Abort();
+            }
         }
+
     }
 }
