@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.AccessControl;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -30,7 +31,6 @@ namespace ActiveBackup
                 {
                     txtFolder.Text = fbd.SelectedPath;
                     watchedPath = fbd.SelectedPath;
-                    Environment.SetEnvironmentVariable("BackupPath", watchedPath);
                 }
             }
         }
@@ -43,6 +43,8 @@ namespace ActiveBackup
                 {
                     txtBackup.Text = fbd.SelectedPath;
                     backupPath = fbd.SelectedPath;
+                    SetAccessRule(backupPath);
+                    Environment.SetEnvironmentVariable("BackupPath", backupPath);
                 }
             }
         }
@@ -86,34 +88,44 @@ namespace ActiveBackup
 
         private void Backup()
         {
-            foreach (String path in whiteList)
+            if ((100 - GetPercentageOfFreeSpace()) >= minPercentage)
             {
-                foreach (String file in Directory.GetFiles(path))
+                string[] allFiles = Directory.GetFiles(watchedPath, "*.*", SearchOption.AllDirectories);
+                foreach (String file in allFiles)
                 {
-                    if (!whiteList.Contains(file))
+                    if ((IsSizeInRange() != -1) && (!whiteList.Contains(file)))
                     {
                         File.SetAttributes(file, FileAttributes.Normal);
-                        String fileName = Path.GetFileName(file);
-                        File.Move(file, Environment.GetEnvironmentVariable("BackupPath") + @"\" + fileName);
+                        string temp = file.Remove(0, 3);
+                        Directory.CreateDirectory(Path.GetDirectoryName(Environment.GetEnvironmentVariable("BackupPath") + "\\" + temp));
+                        File.Move(file, Environment.GetEnvironmentVariable("BackupPath") + "\\" + temp);
+                        ActualizeProgBar();
                     }
                 }
             }
         }
 
+        private void SetAccessRule(string directory)
+        {
+            DirectorySecurity sec = Directory.GetAccessControl(directory);
+            FileSystemAccessRule accRule = new FileSystemAccessRule(Environment.UserDomainName + "\\" + Environment.UserName, FileSystemRights.FullControl, AccessControlType.Allow);
+            sec.AddAccessRule(accRule);
+        }
+
         private int IsSizeInRange()
         {
             int inRange = 0;
-            int freeSpace = GetPercentageOfFreeSpace();
+            int occupiedSpace = 100 - GetPercentageOfFreeSpace();
 
-            if (freeSpace < maxPercentage && freeSpace > minPercentage)
+            if (occupiedSpace < maxPercentage && occupiedSpace > minPercentage)
             {
                 inRange = 0;
             }
-            else if (freeSpace >= maxPercentage)
+            else if (occupiedSpace >= maxPercentage)
             {
                 inRange = 1;
             }
-            else if (freeSpace <= minPercentage)
+            else if (occupiedSpace <= minPercentage)
             {
                 inRange = -1;
             }
